@@ -7,9 +7,14 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// 定义循环模式的枚举
+enum LoopMode { list, single }
+
 void main() async {
+  // 在启动 App 前初始化 Hive
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
+  // 打开一个用于存储音频路径列表的 "盒子"
   await Hive.openBox<List<String>>('audioCache');
   runApp(MyApp());
 }
@@ -38,7 +43,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   bool _isPlaying = false;
-  bool _isLooping = false;
+  LoopMode _loopMode = LoopMode.list; // 使用枚举替代布尔值，默认为列表循环
   List<File> _audioFiles = [];
   String _folderPath = '';
   String _inputNumber = '';
@@ -66,16 +71,26 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       });
     });
     _audioPlayer.onPlayerComplete.listen((event) {
-      if (_isLooping) {
-        _playAudio(_currentIndex);
+      // 根据循环模式决定行为
+      if (_loopMode == LoopMode.single) {
+        _playAudio(_currentIndex); // 单曲循环
       } else {
-        _nextAudio();
+        _nextAudio(); // 列表循环（自动播放下一首）
       }
     });
   }
 
   Future<void> _initApp() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    // 恢复上次的循环模式
+    String? savedLoopMode = prefs.getString('loop_mode');
+    if (savedLoopMode == LoopMode.single.name) {
+      _loopMode = LoopMode.single;
+    } else {
+      _loopMode = LoopMode.list;
+    }
+
     _firstLaunch = prefs.getBool('first_launch') ?? true;
     _folderPath = '/storage/emulated/0/8fu';
 
@@ -87,6 +102,17 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     }
 
     await _loadAudioFiles();
+
+    // 加载文件后，恢复上次播放的曲目状态
+    int lastIndex = prefs.getInt('last_index') ?? 0;
+    if (_audioFiles.isNotEmpty &&
+        lastIndex >= 0 &&
+        lastIndex < _audioFiles.length) {
+      setState(() {
+        _currentIndex = lastIndex;
+        _currentAudioName = _audioFiles[lastIndex].uri.pathSegments.last;
+      });
+    }
   }
 
   Future<void> _requestPermissions() async {
@@ -114,7 +140,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   Future<void> _showPermissionDialog(
-      String content, VoidCallback onPressed) async {
+    String content,
+    VoidCallback onPressed,
+  ) async {
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -142,8 +170,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     final audioBox = Hive.box<List<String>>('audioCache');
     List<String>? cachedPaths = audioBox.get('audio_paths');
 
+    // 1. 尝试从 Hive 缓存加载
     if (cachedPaths != null && cachedPaths.isNotEmpty) {
       List<File> cachedFiles = cachedPaths.map((path) => File(path)).toList();
+      // 快速验证第一个文件是否存在，作为缓存是否有效的简单判断
       if (await cachedFiles.first.exists()) {
         setState(() {
           _audioFiles = cachedFiles;
@@ -151,11 +181,13 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         print("Loaded ${_audioFiles.length} audio files from Hive cache.");
         return;
       } else {
+        // 如果缓存失效，则删除
         print("Hive cache is invalid, deleting.");
         await audioBox.delete('audio_paths');
       }
     }
 
+    // 2. 如果缓存不存在或无效，则从磁盘扫描
     print("Hive cache not found or invalid. Scanning disk for audio files...");
     Directory rootFolder = Directory(_folderPath);
     if (await rootFolder.exists()) {
@@ -171,9 +203,12 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         for (final dir in subdirectories) {
           List<File> audioFilesInDir = await dir
               .list()
-              .where((entity) =>
-                  entity is File &&
-                  (entity.path.endsWith('.mp3') || entity.path.endsWith('.wav')))
+              .where(
+                (entity) =>
+                    entity is File &&
+                    (entity.path.endsWith('.mp3') ||
+                        entity.path.endsWith('.wav')),
+              )
               .cast<File>()
               .toList();
           audioFilesInDir.sort((a, b) => a.path.compareTo(b.path));
@@ -184,6 +219,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
           _audioFiles = allAudioFiles;
         });
 
+        // 3. 将新的列表写入 Hive 缓存
         if (allAudioFiles.isNotEmpty) {
           print("Found ${allAudioFiles.length} files. Updating Hive cache.");
           List<String> pathsToCache = allAudioFiles.map((f) => f.path).toList();
@@ -198,7 +234,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     }
   }
 
-  void _playAudio(int index) {
+  void _playAudio(int index) async {
     if (index >= 0 && index < _audioFiles.length) {
       _audioPlayer.play(DeviceFileSource(_audioFiles[index].path));
       setState(() {
@@ -206,6 +242,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         _currentAudioName = _audioFiles[index].uri.pathSegments.last;
         _isPlaying = true;
       });
+      // 保存当前播放的曲目编号
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('last_index', index);
     }
   }
 
@@ -229,10 +268,18 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     _playAudio(prevIndex);
   }
 
-  void _toggleLoop() {
+  void _toggleLoop() async {
+    // 在两种模式间切换
     setState(() {
-      _isLooping = !_isLooping;
+      if (_loopMode == LoopMode.list) {
+        _loopMode = LoopMode.single;
+      } else {
+        _loopMode = LoopMode.list;
+      }
     });
+    // 保存选择的模式
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('loop_mode', _loopMode.name);
   }
 
   void _handleNumberInput(String number) {
@@ -240,7 +287,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     setState(() {});
 
     _inputTimer?.cancel();
-    _inputTimer = Timer(Duration(seconds: 1), () {
+    _inputTimer = Timer(Duration(seconds: 3), () {
       int? index = int.tryParse(_inputNumber);
       if (index != null && index > 0 && index <= _audioFiles.length) {
         _playAudio(index - 1);
@@ -280,65 +327,130 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       body: Column(
         children: [
           Expanded(
-            flex: 1,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(_currentAudioName),
-                Text(
-                    '曲目: ${_audioFiles.isEmpty ? 0 : _currentIndex + 1} / ${_audioFiles.length}'),
-                if (_inputNumber.isNotEmpty) Text('输入: $_inputNumber'),
-                LinearProgressIndicator(value: _progress),
-              ],
+            flex: 2, // 增加权重以获得更多空间
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+                vertical: 16.0,
+              ),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // --- 歌曲标题 ---
+                  Text(
+                    _currentAudioName,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 24.0,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 12.0),
+
+                  // --- 曲目编号 ---
+                  Text(
+                    '曲目: ${_audioFiles.isEmpty ? 0 : _currentIndex + 1} / ${_audioFiles.length}',
+                    style: TextStyle(
+                      fontSize: 16.0,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  SizedBox(height: 24.0),
+
+                  // --- 数字输入显示区 ---
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 10.0,
+                      horizontal: 12.0,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).primaryColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8.0),
+                    ),
+                    child: Text(
+                      '输入: $_inputNumber',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 22.0,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 3.0,
+                        color: Theme.of(context).primaryColorDark,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 24.0),
+
+                  // --- 播放进度条 ---
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: LinearProgressIndicator(
+                      value: _progress,
+                      minHeight: 8.0,
+                      backgroundColor: Colors.grey.shade300,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           Expanded(
-            flex: 2,
+            flex: 3, // 相应调整权重
             child: Column(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _toggleLoop,
-                          child: Text(
-                            _isLooping ? '循环开启' : '循环关闭',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 16),
+                  child: SizedBox(
+                    height: 64,
+                    child: ElevatedButtonTheme(
+                      data: ElevatedButtonThemeData(
+                        style: ButtonStyle(
+                          textStyle: MaterialStateProperty.all(
+                            const TextStyle(fontSize: 16),
                           ),
                         ),
                       ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _previousAudio,
-                          child: Text('上一首', style: TextStyle(fontSize: 16)),
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _nextAudio,
-                          child: Text('下一首', style: TextStyle(fontSize: 16)),
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _isPlaying
-                              ? _pauseAudio
-                              : () => _playAudio(_currentIndex),
-                          child: Text(
-                            _isPlaying ? '暂停' : '播放',
-                            style: TextStyle(fontSize: 16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _toggleLoop,
+                              child: Text(
+                                _loopMode == LoopMode.list ? '列表循环' : '单曲循环',
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _previousAudio,
+                              child: const Text('上一首歌'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _nextAudio,
+                              child: const Text('下一首歌'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _isPlaying
+                                  ? _pauseAudio
+                                  : () => _playAudio(_currentIndex),
+                              child: Text(_isPlaying ? '暂停' : '播放'),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
                 Expanded(
