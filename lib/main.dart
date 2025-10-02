@@ -14,7 +14,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Audio Player',
+      title: '八福播放器',
       theme: ThemeData(primarySwatch: Colors.blue),
       home: AudioPlayerScreen(),
     );
@@ -26,9 +26,9 @@ class AudioPlayerScreen extends StatefulWidget {
   _AudioPlayerScreenState createState() => _AudioPlayerScreenState();
 }
 
-class _AudioPlayerScreenState extends State<AudioPlayerScreen>  {
+class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   final AudioPlayer _audioPlayer = AudioPlayer();
-  String _currentAudioName = 'No audio playing';
+  String _currentAudioName = '当前无歌曲播放';
   int _currentIndex = 0;
   double _progress = 0.0;
   Duration _duration = Duration.zero;
@@ -72,7 +72,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>  {
     _firstLaunch = prefs.getBool('first_launch') ?? true;
 
     // 关键修改：直接定义公共存储路径
-    _folderPath = '/storage/emulated/0/Download';
+    _folderPath = '/storage/emulated/0/8fu';
 
     // 权限请求变得至关重要，因为我们正在访问应用外部的目录
     await _requestPermissions();
@@ -152,32 +152,42 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>  {
 
   Future<void> _loadAudioFiles() async {
     if (_folderPath.isNotEmpty) {
-      Directory folder = Directory(_folderPath);
-      if (await folder.exists()) {
-        // Use recursive: true to search in subdirectories.
-        List<FileSystemEntity> entities = await folder
-            .list(recursive: true)
-            .toList();
+      Directory rootFolder = Directory(_folderPath);
+      if (await rootFolder.exists()) {
+        final List<File> allAudioFiles = [];
+        try {
+          // 1. Get subdirectories and sort them
+          List<Directory> subdirectories = await rootFolder
+              .list()
+              .where((entity) => entity is Directory)
+              .cast<Directory>()
+              .toList();
+          subdirectories.sort((a, b) => a.path.compareTo(b.path));
 
-        // Filter for files with .mp3 or .wav extensions.
-        _audioFiles = entities
-            .where(
-              (entity) =>
-                  entity is File &&
-                  (entity.path.endsWith('.mp3') ||
-                      entity.path.endsWith('.wav')),
-            )
-            .map((entity) => entity as File)
-            .toList();
+          // 2. Iterate through each subdirectory
+          for (final dir in subdirectories) {
+            // Get audio files and sort them
+            List<File> audioFilesInDir = await dir
+                .list()
+                .where(
+                  (entity) => entity is File && entity.path.endsWith('.mp3'),
+                )
+                .cast<File>()
+                .toList();
 
-        // Sort by filename assuming filenames are like 1.mp3, 2.mp3, etc.
-        _audioFiles.sort(
-          (a, b) => int.parse(
-            a.path.split('/').last.split('.').first,
-          ).compareTo(int.parse(b.path.split('/').last.split('.').first)),
-        );
+            audioFilesInDir.sort((a, b) => a.path.compareTo(b.path));
 
-        setState(() {}); // Update the UI
+            // Add to the main list
+            allAudioFiles.addAll(audioFilesInDir);
+          }
+
+          setState(() {
+            _audioFiles = allAudioFiles;
+          });
+        } catch (e) {
+          print('加载音频文件时出错: $e');
+          _showDialog('加载音频文件失败。请检查 "8fu" 文件夹的子文件夹结构和权限。');
+        }
       }
     }
   }
@@ -276,34 +286,68 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>  {
           Expanded(
             flex: 2,
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    ElevatedButton(
-                      onPressed: _toggleLoop,
-                      child: Text(_isLooping ? 'Loop On' : 'Loop Off'),
-                    ),
-                    ElevatedButton(
-                      onPressed: _previousAudio,
-                      child: Text('Previous'),
-                    ),
-                    ElevatedButton(onPressed: _nextAudio, child: Text('Next')),
-                    ElevatedButton(
-                      onPressed: _isPlaying
-                          ? _pauseAudio
-                          : () => _playAudio(_currentIndex),
-                      child: Text(_isPlaying ? 'Pause' : 'Play'),
-                    ),
-                  ],
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _toggleLoop,
+                          child: Text(
+                            _isLooping ? '循环开启' : '循环关闭',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _previousAudio,
+                          child: Text('上一首', style: TextStyle(fontSize: 16)),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _nextAudio,
+                          child: Text('下一首', style: TextStyle(fontSize: 16)),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _isPlaying
+                              ? _pauseAudio
+                              : () => _playAudio(_currentIndex),
+                          child: Text(
+                            _isPlaying ? '暂停' : '播放',
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 Expanded(
                   child: GridView.count(
-                    crossAxisCount: 3,
+                    crossAxisCount: 5,
+                    mainAxisSpacing: 8.0,
+                    crossAxisSpacing: 8.0,
+                    padding: const EdgeInsets.all(8.0),
                     children: List.generate(10, (index) {
-                      return ElevatedButton(
-                        onPressed: () => _handleNumberInput(index.toString()),
-                        child: Text(index.toString()),
+                      return AspectRatio(
+                        aspectRatio: 1,
+                        child: ElevatedButton(
+                          onPressed: () => _handleNumberInput(index.toString()),
+                          child: Text(
+                            index.toString(),
+                            style: TextStyle(fontSize: 18),
+                          ),
+                        ),
                       );
                     }),
                   ),
