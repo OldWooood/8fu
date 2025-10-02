@@ -1,122 +1,251 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Audio Player',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        primarySwatch: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: AudioPlayerScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
+class AudioPlayerScreen extends StatefulWidget {
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  _AudioPlayerScreenState createState() => _AudioPlayerScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String _currentAudioName = 'No audio playing';
+  int _currentIndex = 0;
+  double _progress = 0.0;
+  Duration _duration = Duration.zero;
+  Duration _position = Duration.zero;
+  bool _isPlaying = false;
+  bool _isLooping = false;
+  List<File> _audioFiles = [];
+  String _folderPath = '';
+  String _inputNumber = '';
+  Timer? _inputTimer;
+  bool _firstLaunch = true;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  @override
+  void initState() {
+    super.initState();
+    _initApp();
+    _audioPlayer.onDurationChanged.listen((Duration d) {
+      setState(() {
+        _duration = d;
+      });
     });
+    _audioPlayer.onPositionChanged.listen((Duration p) {
+      setState(() {
+        _position = p;
+        _progress = _position.inMilliseconds / _duration.inMilliseconds;
+      });
+    });
+    _audioPlayer.onPlayerComplete.listen((event) {
+      if (_isLooping) {
+        _playAudio(_currentIndex);
+      } else {
+        _nextAudio();
+      }
+    });
+  }
+
+  Future<void> _initApp() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    _firstLaunch = prefs.getBool('first_launch') ?? true;
+
+    if (_firstLaunch) {
+      await _requestPermissions();
+      await _createFolder();
+      prefs.setBool('first_launch', false);
+      _showDialog('Please place your audio files in the "8fu" folder.');
+    }
+
+    await _loadAudioFiles();
+  }
+
+  Future<void> _requestPermissions() async {
+    if (Platform.isAndroid) {
+      var status = await Permission.manageExternalStorage.request();
+      if (!status.isGranted) {
+        // Handle permission denied
+        _showDialog('Storage permission is required to access audio files.');
+      }
+    }
+  }
+
+  Future<void> _createFolder() async {
+    Directory? externalDir = await getExternalStorageDirectory();
+    if (externalDir != null) {
+      _folderPath = '${externalDir.path}/8fu';
+      Directory folder = Directory(_folderPath);
+      if (!await folder.exists()) {
+        await folder.create(recursive: true);
+      }
+    }
+  }
+
+  Future<void> _loadAudioFiles() async {
+    if (_folderPath.isNotEmpty) {
+      Directory folder = Directory(_folderPath);
+      if (await folder.exists()) {
+        List<FileSystemEntity> files = folder.listSync();
+        _audioFiles = files.where((file) => file.path.endsWith('.mp3') || file.path.endsWith('.wav')).map((e) => File(e.path)).toList();
+        // Sort by filename assuming filenames are like 1.mp3, 2.mp3, etc.
+        _audioFiles.sort((a, b) => int.parse(a.uri.pathSegments.last.split('.').first).compareTo(int.parse(b.uri.pathSegments.last.split('.').first)));
+        setState(() {});
+      }
+    }
+  }
+
+  void _playAudio(int index) {
+    if (index >= 0 && index < _audioFiles.length) {
+      _audioPlayer.play(DeviceFileSource(_audioFiles[index].path));
+      setState(() {
+        _currentIndex = index;
+        _currentAudioName = _audioFiles[index].uri.pathSegments.last;
+        _isPlaying = true;
+      });
+    }
+  }
+
+  void _pauseAudio() {
+    _audioPlayer.pause();
+    setState(() {
+      _isPlaying = false;
+    });
+  }
+
+  void _nextAudio() {
+    int nextIndex = (_currentIndex + 1) % _audioFiles.length;
+    _playAudio(nextIndex);
+  }
+
+  void _previousAudio() {
+    int prevIndex = (_currentIndex - 1 + _audioFiles.length) % _audioFiles.length;
+    _playAudio(prevIndex);
+  }
+
+  void _toggleLoop() {
+    setState(() {
+      _isLooping = !_isLooping;
+    });
+  }
+
+  void _handleNumberInput(String number) {
+    _inputNumber += number;
+    setState(() {});
+
+    _inputTimer?.cancel();
+    _inputTimer = Timer(Duration(seconds: 1), () {
+      int? index = int.tryParse(_inputNumber);
+      if (index != null && index > 0 && index <= _audioFiles.length) {
+        _playAudio(index - 1); // Assuming 1-based indexing
+      }
+      _inputNumber = '';
+      setState(() {});
+    });
+  }
+
+  void _showDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Info'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    _inputTimer?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('😂You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      appBar: AppBar(title: Text('Audio Player')),
+      body: Column(
+        children: [
+          Expanded(
+            flex: 1,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(_currentAudioName),
+                Text('Index: ${_currentIndex + 1}'),
+                if (_inputNumber.isNotEmpty) Text('Input: $_inputNumber'),
+                LinearProgressIndicator(value: _progress),
+              ],
             ),
-          ],
-        ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    ElevatedButton(
+                      onPressed: _toggleLoop,
+                      child: Text(_isLooping ? 'Loop On' : 'Loop Off'),
+                    ),
+                    ElevatedButton(
+                      onPressed: _previousAudio,
+                      child: Text('Previous'),
+                    ),
+                    ElevatedButton(
+                      onPressed: _nextAudio,
+                      child: Text('Next'),
+                    ),
+                    ElevatedButton(
+                      onPressed: _isPlaying ? _pauseAudio : () => _playAudio(_currentIndex),
+                      child: Text(_isPlaying ? 'Pause' : 'Play'),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: GridView.count(
+                    crossAxisCount: 3,
+                    children: List.generate(10, (index) {
+                      return ElevatedButton(
+                        onPressed: () => _handleNumberInput(index.toString()),
+                        child: Text(index.toString()),
+                      );
+                    }),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
