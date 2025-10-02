@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  await Hive.openBox<List<String>>('audioCache');
   runApp(MyApp());
 }
 
@@ -53,7 +57,12 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     _audioPlayer.onPositionChanged.listen((Duration p) {
       setState(() {
         _position = p;
-        _progress = _position.inMilliseconds / _duration.inMilliseconds;
+        if (_duration.inMilliseconds > 0) {
+          _progress =
+              p.inMilliseconds.toDouble() / _duration.inMilliseconds.toDouble();
+        } else {
+          _progress = 0.0;
+        }
       });
     });
     _audioPlayer.onPlayerComplete.listen((event) {
@@ -65,16 +74,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     });
   }
 
-  // ... 其他代码保持不变 ...
-
   Future<void> _initApp() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     _firstLaunch = prefs.getBool('first_launch') ?? true;
-
-    // 关键修改：直接定义公共存储路径
     _folderPath = '/storage/emulated/0/8fu';
 
-    // 权限请求变得至关重要，因为我们正在访问应用外部的目录
     await _requestPermissions();
     if (_firstLaunch) {
       await _createFolder();
@@ -82,47 +86,35 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       _showDialog('请将您的音频文件放置在手机根目录下的 "8fu" 文件夹中。');
     }
 
-    // 现在加载这个公共路径下的文件
     await _loadAudioFiles();
   }
 
-  // ... class _AudioPlayerScreenState ...
-
   Future<void> _requestPermissions() async {
-    PermissionStatus status;
-
-    // 1. 判断安卓版本
     if (Platform.isAndroid) {
       final deviceInfo = await DeviceInfoPlugin().androidInfo;
-      // Android 11 (SDK 30) 或更高版本
+      PermissionStatus status;
       if (deviceInfo.version.sdkInt >= 30) {
         status = await Permission.manageExternalStorage.status;
         if (!status.isGranted) {
-          // 显示对话框，引导用户去开启“所有文件访问权限”
           await _showPermissionDialog(
             '为了在安卓11及以上版本正常读写文件，应用需要“所有文件访问权限”。\n\n点击“去开启”后，请在新页面中找到并打开此应用的开关，然后返回。',
             () async {
               await Permission.manageExternalStorage.request();
+              Navigator.pop(context);
             },
           );
         }
-      }
-      // Android 10 (SDK 29) 及以下版本
-      else {
+      } else {
         status = await Permission.storage.status;
         if (!status.isGranted) {
-          // 直接请求旧的存储权限
           await Permission.storage.request();
         }
       }
     }
   }
 
-  // 辅助方法：抽离出通用的权限提示对话框
   Future<void> _showPermissionDialog(
-    String content,
-    VoidCallback onPressed,
-  ) async {
+      String content, VoidCallback onPressed) async {
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -135,60 +127,74 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   Future<void> _createFolder() async {
-    // 关键修改：直接在公共路径上创建目录
     Directory folder = Directory(_folderPath);
     if (!await folder.exists()) {
       try {
         await folder.create(recursive: true);
       } catch (e) {
-        // 如果因为权限问题创建失败，可以给用户一个提示
         print('创建文件夹失败: $e');
         _showDialog('创建 "8fu" 文件夹失败，请检查应用的存储权限并重试。');
       }
     }
   }
 
-  // ... _loadAudioFiles 和其他方法保持不变 ...
-
   Future<void> _loadAudioFiles() async {
-    if (_folderPath.isNotEmpty) {
-      Directory rootFolder = Directory(_folderPath);
-      if (await rootFolder.exists()) {
-        final List<File> allAudioFiles = [];
-        try {
-          // 1. Get subdirectories and sort them
-          List<Directory> subdirectories = await rootFolder
-              .list()
-              .where((entity) => entity is Directory)
-              .cast<Directory>()
-              .toList();
-          subdirectories.sort((a, b) => a.path.compareTo(b.path));
+    final audioBox = Hive.box<List<String>>('audioCache');
+    List<String>? cachedPaths = audioBox.get('audio_paths');
 
-          // 2. Iterate through each subdirectory
-          for (final dir in subdirectories) {
-            // Get audio files and sort them
-            List<File> audioFilesInDir = await dir
-                .list()
-                .where(
-                  (entity) => entity is File && entity.path.endsWith('.mp3'),
-                )
-                .cast<File>()
-                .toList();
-
-            audioFilesInDir.sort((a, b) => a.path.compareTo(b.path));
-
-            // Add to the main list
-            allAudioFiles.addAll(audioFilesInDir);
-          }
-
-          setState(() {
-            _audioFiles = allAudioFiles;
-          });
-        } catch (e) {
-          print('加载音频文件时出错: $e');
-          _showDialog('加载音频文件失败。请检查 "8fu" 文件夹的子文件夹结构和权限。');
-        }
+    if (cachedPaths != null && cachedPaths.isNotEmpty) {
+      List<File> cachedFiles = cachedPaths.map((path) => File(path)).toList();
+      if (await cachedFiles.first.exists()) {
+        setState(() {
+          _audioFiles = cachedFiles;
+        });
+        print("Loaded ${_audioFiles.length} audio files from Hive cache.");
+        return;
+      } else {
+        print("Hive cache is invalid, deleting.");
+        await audioBox.delete('audio_paths');
       }
+    }
+
+    print("Hive cache not found or invalid. Scanning disk for audio files...");
+    Directory rootFolder = Directory(_folderPath);
+    if (await rootFolder.exists()) {
+      final List<File> allAudioFiles = [];
+      try {
+        List<Directory> subdirectories = await rootFolder
+            .list()
+            .where((entity) => entity is Directory)
+            .cast<Directory>()
+            .toList();
+        subdirectories.sort((a, b) => a.path.compareTo(b.path));
+
+        for (final dir in subdirectories) {
+          List<File> audioFilesInDir = await dir
+              .list()
+              .where((entity) =>
+                  entity is File &&
+                  (entity.path.endsWith('.mp3') || entity.path.endsWith('.wav')))
+              .cast<File>()
+              .toList();
+          audioFilesInDir.sort((a, b) => a.path.compareTo(b.path));
+          allAudioFiles.addAll(audioFilesInDir);
+        }
+
+        setState(() {
+          _audioFiles = allAudioFiles;
+        });
+
+        if (allAudioFiles.isNotEmpty) {
+          print("Found ${allAudioFiles.length} files. Updating Hive cache.");
+          List<String> pathsToCache = allAudioFiles.map((f) => f.path).toList();
+          await audioBox.put('audio_paths', pathsToCache);
+        }
+      } catch (e) {
+        print('加载音频文件时出错: $e');
+        _showDialog('加载音频文件失败。请检查 "8fu" 文件夹的子文件夹结构和权限。');
+      }
+    } else {
+      _showDialog('根目录 "$_folderPath" 不存在。');
     }
   }
 
@@ -211,11 +217,13 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   void _nextAudio() {
+    if (_audioFiles.isEmpty) return;
     int nextIndex = (_currentIndex + 1) % _audioFiles.length;
     _playAudio(nextIndex);
   }
 
   void _previousAudio() {
+    if (_audioFiles.isEmpty) return;
     int prevIndex =
         (_currentIndex - 1 + _audioFiles.length) % _audioFiles.length;
     _playAudio(prevIndex);
@@ -235,7 +243,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     _inputTimer = Timer(Duration(seconds: 1), () {
       int? index = int.tryParse(_inputNumber);
       if (index != null && index > 0 && index <= _audioFiles.length) {
-        _playAudio(index - 1); // Assuming 1-based indexing
+        _playAudio(index - 1);
       }
       _inputNumber = '';
       setState(() {});
@@ -246,12 +254,12 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Info'),
+        title: Text('提示'),
         content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('OK'),
+            child: Text('好的'),
           ),
         ],
       ),
@@ -268,7 +276,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Audio Player')),
+      appBar: AppBar(title: Text('八福播放器')),
       body: Column(
         children: [
           Expanded(
@@ -277,8 +285,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(_currentAudioName),
-                Text('Index: ${_currentIndex + 1}'),
-                if (_inputNumber.isNotEmpty) Text('Input: $_inputNumber'),
+                Text(
+                    '曲目: ${_audioFiles.isEmpty ? 0 : _currentIndex + 1} / ${_audioFiles.length}'),
+                if (_inputNumber.isNotEmpty) Text('输入: $_inputNumber'),
                 LinearProgressIndicator(value: _progress),
               ],
             ),
