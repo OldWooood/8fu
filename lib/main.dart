@@ -110,7 +110,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         lastIndex < _audioFiles.length) {
       setState(() {
         _currentIndex = lastIndex;
-        _currentAudioName = _audioFiles[lastIndex].uri.pathSegments.last;
+        final fileName = _audioFiles[lastIndex].uri.pathSegments.last;
+        final dotIndex = fileName.lastIndexOf('.');
+        _currentAudioName = (dotIndex != -1)
+            ? fileName.substring(0, dotIndex)
+            : fileName;
       });
     }
   }
@@ -237,9 +241,16 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   void _playAudio(int index) async {
     if (index >= 0 && index < _audioFiles.length) {
       _audioPlayer.play(DeviceFileSource(_audioFiles[index].path));
+
+      final fileName = _audioFiles[index].uri.pathSegments.last;
+      final dotIndex = fileName.lastIndexOf('.');
+      final displayName = (dotIndex != -1)
+          ? fileName.substring(0, dotIndex)
+          : fileName;
+
       setState(() {
         _currentIndex = index;
-        _currentAudioName = _audioFiles[index].uri.pathSegments.last;
+        _currentAudioName = displayName;
         _isPlaying = true;
       });
       // 保存当前播放的曲目编号
@@ -338,12 +349,18 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   // --- 歌曲标题 ---
-                  Text(
-                    _currentAudioName,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 24.0,
-                      fontWeight: FontWeight.bold,
+                  Container(
+                    height: 72, // 给予足够空间以容纳两行文本，防止布局跳动
+                    alignment: Alignment.center,
+                    child: Text(
+                      _currentAudioName,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 24.0,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   SizedBox(height: 12.0),
