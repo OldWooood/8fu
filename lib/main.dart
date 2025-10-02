@@ -419,54 +419,67 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: SizedBox(
-                    height: 64,
-                    child: ElevatedButtonTheme(
-                      data: ElevatedButtonThemeData(
-                        style: ButtonStyle(
-                          textStyle: MaterialStateProperty.all(
-                            const TextStyle(fontSize: 16),
-                          ),
+                  child: ElevatedButtonTheme(
+                    data: ElevatedButtonThemeData(
+                      style: ButtonStyle(
+                        textStyle: MaterialStateProperty.all(
+                          const TextStyle(fontSize: 16),
                         ),
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: _toggleLoop,
-                              child: Text(
-                                _loopMode == LoopMode.list ? '列表循环' : '单曲循环',
-                                textAlign: TextAlign.center,
+                    ),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 64,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _toggleLoop,
+                                  child: Text(
+                                    _loopMode == LoopMode.list
+                                        ? '列表循环'
+                                        : '单曲循环',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _isPlaying
+                                      ? _pauseAudio
+                                      : () => _playAudio(_currentIndex),
+                                  child: Text(_isPlaying ? '暂停' : '播放'),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: _previousAudio,
-                              child: const Text('上一首歌'),
-                            ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 64,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _previousAudio,
+                                  child: const Text('上一首歌'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _nextAudio,
+                                  child: const Text('下一首歌'),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: _nextAudio,
-                              child: const Text('下一首歌'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: _isPlaying
-                                  ? _pauseAudio
-                                  : () => _playAudio(_currentIndex),
-                              child: Text(_isPlaying ? '暂停' : '播放'),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
