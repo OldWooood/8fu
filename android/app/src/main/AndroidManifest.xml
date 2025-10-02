@@ -42,4 +42,12 @@
             <data android:mimeType="text/plain"/>
         </intent>
     </queries>
+
+    <!-- 1. 用于 Android 10 及以下的旧版存储权限 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <!-- 写入权限也是必需的，因为我们需要创建文件夹 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+
+    <!-- 2. 用于 Android 11 及以上的所有文件访问权限 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 </manifest>

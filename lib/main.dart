@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 void main() {
   runApp(MyApp());
@@ -15,9 +15,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Audio Player',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-      ),
+      theme: ThemeData(primarySwatch: Colors.blue),
       home: AudioPlayerScreen(),
     );
   }
@@ -28,7 +26,7 @@ class AudioPlayerScreen extends StatefulWidget {
   _AudioPlayerScreenState createState() => _AudioPlayerScreenState();
 }
 
-class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
+class _AudioPlayerScreenState extends State<AudioPlayerScreen>  {
   final AudioPlayer _audioPlayer = AudioPlayer();
   String _currentAudioName = 'No audio playing';
   int _currentIndex = 0;
@@ -67,50 +65,119 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     });
   }
 
+  // ... 其他代码保持不变 ...
+
   Future<void> _initApp() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     _firstLaunch = prefs.getBool('first_launch') ?? true;
 
+    // 关键修改：直接定义公共存储路径
+    _folderPath = '/storage/emulated/0/Download';
+
+    // 权限请求变得至关重要，因为我们正在访问应用外部的目录
+    await _requestPermissions();
     if (_firstLaunch) {
-      await _requestPermissions();
       await _createFolder();
       prefs.setBool('first_launch', false);
-      _showDialog('Please place your audio files in the "8fu" folder.');
+      _showDialog('请将您的音频文件放置在手机根目录下的 "8fu" 文件夹中。');
     }
 
+    // 现在加载这个公共路径下的文件
     await _loadAudioFiles();
   }
 
+  // ... class _AudioPlayerScreenState ...
+
   Future<void> _requestPermissions() async {
+    PermissionStatus status;
+
+    // 1. 判断安卓版本
     if (Platform.isAndroid) {
-      var status = await Permission.manageExternalStorage.request();
-      if (!status.isGranted) {
-        // Handle permission denied
-        _showDialog('Storage permission is required to access audio files.');
+      final deviceInfo = await DeviceInfoPlugin().androidInfo;
+      // Android 11 (SDK 30) 或更高版本
+      if (deviceInfo.version.sdkInt >= 30) {
+        status = await Permission.manageExternalStorage.status;
+        if (!status.isGranted) {
+          // 显示对话框，引导用户去开启“所有文件访问权限”
+          await _showPermissionDialog(
+            '为了在安卓11及以上版本正常读写文件，应用需要“所有文件访问权限”。\n\n点击“去开启”后，请在新页面中找到并打开此应用的开关，然后返回。',
+            () async {
+              await Permission.manageExternalStorage.request();
+            },
+          );
+        }
+      }
+      // Android 10 (SDK 29) 及以下版本
+      else {
+        status = await Permission.storage.status;
+        if (!status.isGranted) {
+          // 直接请求旧的存储权限
+          await Permission.storage.request();
+        }
       }
     }
   }
 
+  // 辅助方法：抽离出通用的权限提示对话框
+  Future<void> _showPermissionDialog(
+    String content,
+    VoidCallback onPressed,
+  ) async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('权限申请'),
+        content: Text(content),
+        actions: [TextButton(onPressed: onPressed, child: const Text('去开启'))],
+      ),
+    );
+  }
+
   Future<void> _createFolder() async {
-    Directory? externalDir = await getExternalStorageDirectory();
-    if (externalDir != null) {
-      _folderPath = '${externalDir.path}/8fu';
-      Directory folder = Directory(_folderPath);
-      if (!await folder.exists()) {
+    // 关键修改：直接在公共路径上创建目录
+    Directory folder = Directory(_folderPath);
+    if (!await folder.exists()) {
+      try {
         await folder.create(recursive: true);
+      } catch (e) {
+        // 如果因为权限问题创建失败，可以给用户一个提示
+        print('创建文件夹失败: $e');
+        _showDialog('创建 "8fu" 文件夹失败，请检查应用的存储权限并重试。');
       }
     }
   }
+
+  // ... _loadAudioFiles 和其他方法保持不变 ...
 
   Future<void> _loadAudioFiles() async {
     if (_folderPath.isNotEmpty) {
       Directory folder = Directory(_folderPath);
       if (await folder.exists()) {
-        List<FileSystemEntity> files = folder.listSync();
-        _audioFiles = files.where((file) => file.path.endsWith('.mp3') || file.path.endsWith('.wav')).map((e) => File(e.path)).toList();
+        // Use recursive: true to search in subdirectories.
+        List<FileSystemEntity> entities = await folder
+            .list(recursive: true)
+            .toList();
+
+        // Filter for files with .mp3 or .wav extensions.
+        _audioFiles = entities
+            .where(
+              (entity) =>
+                  entity is File &&
+                  (entity.path.endsWith('.mp3') ||
+                      entity.path.endsWith('.wav')),
+            )
+            .map((entity) => entity as File)
+            .toList();
+
         // Sort by filename assuming filenames are like 1.mp3, 2.mp3, etc.
-        _audioFiles.sort((a, b) => int.parse(a.uri.pathSegments.last.split('.').first).compareTo(int.parse(b.uri.pathSegments.last.split('.').first)));
-        setState(() {});
+        _audioFiles.sort(
+          (a, b) => int.parse(
+            a.path.split('/').last.split('.').first,
+          ).compareTo(int.parse(b.path.split('/').last.split('.').first)),
+        );
+
+        setState(() {}); // Update the UI
       }
     }
   }
@@ -139,7 +206,8 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   }
 
   void _previousAudio() {
-    int prevIndex = (_currentIndex - 1 + _audioFiles.length) % _audioFiles.length;
+    int prevIndex =
+        (_currentIndex - 1 + _audioFiles.length) % _audioFiles.length;
     _playAudio(prevIndex);
   }
 
@@ -220,12 +288,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                       onPressed: _previousAudio,
                       child: Text('Previous'),
                     ),
+                    ElevatedButton(onPressed: _nextAudio, child: Text('Next')),
                     ElevatedButton(
-                      onPressed: _nextAudio,
-                      child: Text('Next'),
-                    ),
-                    ElevatedButton(
-                      onPressed: _isPlaying ? _pauseAudio : () => _playAudio(_currentIndex),
+                      onPressed: _isPlaying
+                          ? _pauseAudio
+                          : () => _playAudio(_currentIndex),
                       child: Text(_isPlaying ? 'Pause' : 'Play'),
                     ),
                   ],
