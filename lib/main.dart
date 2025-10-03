@@ -41,7 +41,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   int _currentIndex = 0;
   double _progress = 0.0;
   Duration _duration = Duration.zero;
-  Duration _position = Duration.zero;
   bool _isPlaying = false;
   LoopMode _loopMode = LoopMode.list; // 使用枚举替代布尔值，默认为列表循环
   List<File> _audioFiles = [];
@@ -61,7 +60,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     });
     _audioPlayer.onPositionChanged.listen((Duration p) {
       setState(() {
-        _position = p;
         if (_duration.inMilliseconds > 0) {
           _progress =
               p.inMilliseconds.toDouble() / _duration.inMilliseconds.toDouble();
@@ -127,9 +125,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         status = await Permission.manageExternalStorage.status;
         if (!status.isGranted) {
           await _showPermissionDialog(
-            '为了在安卓11及以上版本正常读写文件，应用需要“所有文件访问权限”。\n\n点击“去开启”后，请在新页面中找到并打开此应用的开关，然后返回。',
+            '''为了在安卓11及以上版本正常读写文件，应用需要“所有文件访问权限”。
+点击“去开启”后，请在新页面中找到并打开此应用的开关，然后返回。''',
             () async {
               await Permission.manageExternalStorage.request();
+              if (!mounted) return;
               Navigator.pop(context);
             },
           );
@@ -164,7 +164,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       try {
         await folder.create(recursive: true);
       } catch (e) {
-        print('创建文件夹失败: $e');
         _showDialog('创建 "8fu" 文件夹失败，请检查应用的存储权限并重试。');
       }
     }
@@ -182,17 +181,14 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         setState(() {
           _audioFiles = cachedFiles;
         });
-        print("Loaded ${_audioFiles.length} audio files from Hive cache.");
         return;
       } else {
         // 如果缓存失效，则删除
-        print("Hive cache is invalid, deleting.");
         await audioBox.delete('audio_paths');
       }
     }
 
     // 2. 如果缓存不存在或无效，则从磁盘扫描
-    print("Hive cache not found or invalid. Scanning disk for audio files...");
     Directory rootFolder = Directory(_folderPath);
     if (await rootFolder.exists()) {
       final List<File> allAudioFiles = [];
@@ -225,12 +221,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
         // 3. 将新的列表写入 Hive 缓存
         if (allAudioFiles.isNotEmpty) {
-          print("Found ${allAudioFiles.length} files. Updating Hive cache.");
           List<String> pathsToCache = allAudioFiles.map((f) => f.path).toList();
           await audioBox.put('audio_paths', pathsToCache);
         }
       } catch (e) {
-        print('加载音频文件时出错: $e');
         _showDialog('加载音频文件失败。请检查 "8fu" 文件夹的子文件夹结构和权限。');
       }
     } else {
@@ -298,7 +292,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     setState(() {});
 
     _inputTimer?.cancel();
-    _inputTimer = Timer(Duration(seconds: 3), () {
+    _inputTimer = Timer(Duration(seconds: 2, milliseconds: 500), () {
       int? index = int.tryParse(_inputNumber);
       if (index != null && index > 0 && index <= _audioFiles.length) {
         _playAudio(index - 1);
@@ -338,7 +332,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
       body: Column(
         children: [
           Expanded(
-            flex: 2, // 增加权重以获得更多空间
             child: Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: 24.0,
@@ -350,7 +343,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                 children: [
                   // --- 歌曲标题 ---
                   Container(
-                    height: 72, // 给予足够空间以容纳两行文本，防止布局跳动
+                    height: 96, // 给予足够空间以容纳两行文本，防止布局跳动
                     alignment: Alignment.center,
                     child: Text(
                       _currentAudioName,
@@ -383,11 +376,11 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                       horizontal: 12.0,
                     ),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).primaryColor.withOpacity(0.1),
+                      color: Theme.of(context).primaryColor.withAlpha(26),
                       borderRadius: BorderRadius.circular(8.0),
                     ),
                     child: Text(
-                      '输入: $_inputNumber',
+                      _inputNumber,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 22.0,
@@ -413,7 +406,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
             ),
           ),
           Expanded(
-            flex: 3, // 相应调整权重
             child: Column(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -422,7 +414,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   child: ElevatedButtonTheme(
                     data: ElevatedButtonThemeData(
                       style: ButtonStyle(
-                        textStyle: MaterialStateProperty.all(
+                        textStyle: WidgetStateProperty.all(
                           const TextStyle(fontSize: 16),
                         ),
                       ),
