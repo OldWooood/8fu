@@ -39,7 +39,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   String _currentAudioName = '当前无歌曲播放';
   int _currentIndex = 0;
-  double _progress = 0.0;
   Duration _duration = Duration.zero;
   bool _isPlaying = false;
   LoopMode _loopMode = LoopMode.list; // 使用枚举替代布尔值，默认为列表循环
@@ -56,16 +55,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     _audioPlayer.onDurationChanged.listen((Duration d) {
       setState(() {
         _duration = d;
-      });
-    });
-    _audioPlayer.onPositionChanged.listen((Duration p) {
-      setState(() {
-        if (_duration.inMilliseconds > 0) {
-          _progress =
-              p.inMilliseconds.toDouble() / _duration.inMilliseconds.toDouble();
-        } else {
-          _progress = 0.0;
-        }
       });
     });
     _audioPlayer.onPlayerComplete.listen((event) {
@@ -292,7 +281,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     setState(() {});
 
     _inputTimer?.cancel();
-    _inputTimer = Timer(Duration(seconds: 2, milliseconds: 500), () {
+    _inputTimer = Timer(Duration(seconds: 3), () {
       int? index = int.tryParse(_inputNumber);
       if (index != null && index > 0 && index <= _audioFiles.length) {
         _playAudio(index - 1);
@@ -393,13 +382,23 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
                   SizedBox(height: 24.0),
 
                   // --- 播放进度条 ---
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: LinearProgressIndicator(
-                      value: _progress,
-                      minHeight: 8.0,
-                      backgroundColor: Colors.grey.shade300,
-                    ),
+                  StreamBuilder<Duration>(
+                    stream: _audioPlayer.onPositionChanged,
+                    builder: (context, snapshot) {
+                      final position = snapshot.data ?? Duration.zero;
+                      final progress = (_duration.inMilliseconds > 0)
+                          ? position.inMilliseconds.toDouble() /
+                                _duration.inMilliseconds.toDouble()
+                          : 0.0;
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 8.0,
+                          backgroundColor: Colors.grey.shade300,
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
